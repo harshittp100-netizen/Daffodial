@@ -1,0 +1,262 @@
+// MBDC 2027 – Prisma Schema
+// Database: Neon Serverless PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // For Neon pooled connections use the pooled URL in DATABASE_URL
+  // and the direct URL in DIRECT_URL if needed for migrations
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Auth & Roles ───────────────────────────────────────────
+
+enum Role {
+  SUPER_ADMIN
+  EVENT_DIRECTOR
+  OPERATIONS_MANAGER
+  REGISTRATION_MANAGER
+  DEBATE_MANAGER
+  SPEAKER_MANAGER
+  SPONSORSHIP_MANAGER
+  MARKETING_MANAGER
+  FINANCE_MANAGER
+  VOLUNTEER
+  CHECKIN_STAFF
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String?
+  role          Role      @default(VOLUNTEER)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  createdRegistrations Registration[] @relation("CreatedBy")
+  checkIns             CheckIn[]
+  auditLogs            AuditLog[]
+}
+
+// ─── Event Configuration ────────────────────────────────────
+
+model EventConfig {
+  id              String   @id @default(cuid())
+  name            String   @default("Mumbai Business Debate Championship 2027")
+  tagline         String   @default("Where Ideas Compete, Leaders Emerge.")
+  dateWindow      String   @default("October–December 2027")
+  exactDates      String?
+  venueName       String?
+  venueAddress    String?
+  brandPrimary    String   @default("#0A1628")
+  brandAccent     String   @default("#D4AF37")
+  contactEmail    String?
+  contactPhone    String?
+  isRegistrationOpen Boolean @default(false)
+  isRsvpOnly      Boolean  @default(true) // Default: RSVP (invitation-based)
+  setupCompleted  Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ─── Registration / RSVP ────────────────────────────────────
+
+enum RegistrationCategory {
+  GENERAL_ATTENDEE
+  DEBATE_TEAM
+  RESEARCHER
+  WORKSHOP
+  SPEAKER
+  JUDGE
+  VIP
+  VOLUNTEER
+  SPONSOR_REP
+}
+
+enum RegistrationStatus {
+  PENDING
+  CONFIRMED
+  WAITLISTED
+  CANCELLED
+  CHECKED_IN
+}
+
+model Registration {
+  id              String               @id @default(cuid())
+  referenceCode   String               @unique // e.g. MBDC-2027-XXXX
+  category        RegistrationCategory
+  status          RegistrationStatus   @default(PENDING)
+
+  // Personal
+  firstName       String
+  lastName        String
+  email           String
+  phone           String?
+  organisation    String?
+  designation     String?
+
+  // Team-specific (for DEBATE_TEAM)
+  teamName        String?
+  institution     String?
+  captainName     String?
+  teamMembers     String?              // JSON or newline-separated
+
+  // RSVP specific
+  isRsvp          Boolean              @default(true)
+  invitationCode  String?              // For invitation-only RSVPs
+  rsvpResponse    String?              // YES / NO / MAYBE
+
+  // Consent
+  consentGiven    Boolean              @default(false)
+  consentAt       DateTime?
+
+  // Ticket
+  ticketToken     String?              @unique // Unpredictable token for QR
+  ticketIssuedAt  DateTime?
+
+  notes           String?
+  createdById     String?
+  createdBy       User?                @relation("CreatedBy", fields: [createdById], references: [id])
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  checkIns        CheckIn[]
+  ticket          Ticket?
+
+  @@index([email])
+  @@index([category])
+  @@index([status])
+  @@index([referenceCode])
+}
+
+model Ticket {
+  id              String       @id @default(cuid())
+  registrationId  String       @unique
+  registration    Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  qrPayload       String       // Secure token (no PII)
+  status          String       @default("VALID") // VALID | USED | CANCELLED | INVALID
+  issuedAt        DateTime     @default(now())
+  usedAt          DateTime?
+}
+
+model CheckIn {
+  id              String       @id @default(cuid())
+  registrationId  String
+  registration    Registration @relation(fields: [registrationId], references: [id])
+  checkedInById   String?
+  checkedInBy     User?        @relation(fields: [checkedInById], references: [id])
+  checkedInAt     DateTime     @default(now())
+  method          String       @default("QR") // QR | MANUAL
+  notes           String?
+}
+
+// ─── Speakers & Guests ──────────────────────────────────────
+
+enum GuestStatus {
+  INVITED
+  CONFIRMED
+  DECLINED
+  CANCELLED
+}
+
+model Speaker {
+  id              String      @id @default(cuid())
+  name            String
+  title           String?
+  organisation    String?
+  bio             String?
+  photoUrl        String?     // Cloudinary URL
+  category        String?     // Keynote / Panelist / Judge / Host etc.
+  status          GuestStatus @default(INVITED)
+  sessionTitle    String?
+  sessionTime     String?
+  isPublic        Boolean     @default(false) // Only show confirmed + isPublic on website
+  sortOrder       Int         @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+// ─── Sponsors ───────────────────────────────────────────────
+
+enum SponsorTier {
+  TITLE
+  PRESENTING
+  GOLD
+  SILVER
+  ASSOCIATE
+  CUSTOM
+}
+
+enum SponsorStatus {
+  PROSPECT
+  IN_DISCUSSION
+  AGREED
+  CONFIRMED
+  FULFILLED
+  DECLINED
+}
+
+model Sponsor {
+  id              String        @id @default(cuid())
+  name            String
+  logoUrl         String?       // Cloudinary
+  website         String?
+  tier            SponsorTier?
+  status          SponsorStatus @default(PROSPECT)
+  contactName     String?
+  contactEmail    String?
+  contactPhone    String?
+  packageValue    Int?          // In INR
+  deliverables    String?       // JSON or text
+  notes           String?
+  isPublic        Boolean       @default(false)
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+}
+
+// ─── Agenda / Sessions ──────────────────────────────────────
+
+model AgendaItem {
+  id              String   @id @default(cuid())
+  day             Int      // 1 or 2
+  startTime       String?
+  endTime         String?
+  title           String
+  description     String?
+  location        String?
+  sortOrder       Int      @default(0)
+  isPublished     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ─── Audit ──────────────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  action      String
+  entity      String?
+  entityId    String?
+  metadata    String?  // JSON
+  createdAt   DateTime @default(now())
+}
+
+// ─── System Setup (Super Admin) ─────────────────────────────
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  isSecret    Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+}
